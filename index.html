@@ -47,6 +47,11 @@ svg.plan.walls-mode .item{pointer-events:none}
 svg.plan:not(.walls-mode) .hit{pointer-events:none}
 .tools{position:absolute;left:50%;bottom:8px;transform:translateX(-50%);display:flex;gap:6px;align-items:center;justify-content:center;flex-wrap:wrap;background:rgba(255,255,255,.97);border:1px solid #b9c7c4;border-radius:12px;padding:6px 8px;box-shadow:0 2px 10px rgba(0,0,0,.15);max-width:96%}
 .tools.hidden{display:none}
+.shapebox{display:flex;flex-direction:column;gap:8px}
+.shapebox p{font-size:12px}
+svg.shape{width:100%;height:230px;background:#f2f6f5;border:1px solid var(--line);border-radius:9px;touch-action:none;display:block}
+.shapebox .four{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+.shapebox .four input{width:100%;font-size:15px;padding:0 4px}
 .empty-plan{position:absolute;inset:0;display:flex;flex-direction:column;gap:10px;align-items:center;justify-content:center;text-align:center;padding:20px;background:#f7faf9}
 .empty-plan.hidden{display:none}
 .empty-plan p{margin:0;color:var(--muted);max-width:280px}
@@ -250,14 +255,33 @@ function wallLabel(key) {
 }
 
 /* ---------- snapping ---------- */
-function bestDelta(c, hh, targets, T) {
+function itemBoxes(it, rot) {
+  const parts = it.parts && it.parts.length ? it.parts : [{ x: 0, y: 0, w: it.w, d: it.d }];
+  const r = norm(rot); let boxes;
+  if (r % 90 !== 0) { const [hw, hh] = halfExt(it.w, it.d, rot); boxes = [{ x1: -hw, x2: hw, y1: -hh, y2: hh }]; }
+  else boxes = parts.map(p => {
+    let cx = p.x + p.w / 2 - it.w / 2, cy = p.y + p.d / 2 - it.d / 2, hw = p.w / 2, hh = p.d / 2;
+    for (let i = 0; i < r / 90; i++) { [cx, cy] = [-cy, cx]; [hw, hh] = [hh, hw]; }
+    return { x1: cx - hw, x2: cx + hw, y1: cy - hh, y2: cy + hh };
+  });
+  const inside = (x, y) => boxes.some(q => x > q.x1 + 1e-6 && x < q.x2 - 1e-6 && y > q.y1 + 1e-6 && y < q.y2 - 1e-6);
+  const ts = [.1, .3, .5, .7, .9];
+  for (const q of boxes) {
+    const ys = ts.map(t => q.y1 + (q.y2 - q.y1) * t), xs = ts.map(t => q.x1 + (q.x2 - q.x1) * t);
+    q.e1 = ys.some(y => !inside(q.x1 - .5, y)); q.e2 = ys.some(y => !inside(q.x2 + .5, y));
+    q.f1 = xs.some(x => !inside(x, q.y1 - .5)); q.f2 = xs.some(x => !inside(x, q.y2 + .5));
+  }
+  return boxes;
+}
+function bestDelta(c, offs, targets, T) {
   let bd = null;
-  for (const t of targets) for (const d of [t - (c - hh), t - (c + hh)]) if (Math.abs(d) <= T && (bd === null || Math.abs(d) < Math.abs(bd))) bd = d;
+  for (const o of offs) for (const t of targets) { const d = t - (c + o); if (Math.abs(d) <= T && (bd === null || Math.abs(d) < Math.abs(bd))) bd = d; }
   return bd || 0;
 }
 function snapMove(lay, pid, roomId, it, rot, x, y, sc) {
   const g = G[roomId]; if (!g) return [x, y];
-  const T = 10 / sc, [hw, hh] = halfExt(it.w, it.d, rot), xs = [], ys = [];
+  const T = 10 / sc, [hw, hh] = halfExt(it.w, it.d, rot), xs = [], ys = [], ox = [], oy = [];
+  for (const q of itemBoxes(it, rot)) { if (q.e1) ox.push(q.x1); if (q.e2) ox.push(q.x2); if (q.f1) oy.push(q.y1); if (q.f2) oy.push(q.y2); }
   for (const e of g.edges) {
     if (e.open) continue;
     if (Math.abs(e.a[0] - e.b[0]) < 0.01) {
@@ -268,22 +292,23 @@ function snapMove(lay, pid, roomId, it, rot, x, y, sc) {
       if (x + hw + T > x1 && x - hw - T < x2) ys.push(e.a[1]);
     }
   }
-  const boxes = [];
   for (const p of lay.placements) {
     if (p.id === pid || p.room !== roomId) continue;
     const o = itemById(p.itemId); if (!o) continue;
-    const [wx, wy] = world(p), [a, b] = halfExt(o.w, o.d, p.rot);
-    boxes.push([wx - a, wx + a, wy - b, wy + b]);
+    const [wx, wy] = world(p);
+    for (const q of itemBoxes(o, p.rot)) {
+      const x1 = wx + q.x1, x2 = wx + q.x2, y1 = wy + q.y1, y2 = wy + q.y2;
+      if (y + hh + T * 2 > y1 && y - hh - T * 2 < y2) { if (q.e1) xs.push(x1); if (q.e2) xs.push(x2); }
+      if (x + hw + T * 2 > x1 && x - hw - T * 2 < x2) { if (q.f1) ys.push(y1); if (q.f2) ys.push(y2); }
+    }
   }
   for (const f of g.room.fixtures || []) {
     if (f.inset) continue;
-    boxes.push([g.pos[0] + f.position[0], g.pos[0] + f.position[0] + f.size[0], g.pos[1] + f.position[1], g.pos[1] + f.position[1] + f.size[1]]);
-  }
-  for (const [x1, x2, y1, y2] of boxes) {
+    const x1 = g.pos[0] + f.position[0], x2 = x1 + f.size[0], y1 = g.pos[1] + f.position[1], y2 = y1 + f.size[1];
     if (y + hh + T * 2 > y1 && y - hh - T * 2 < y2) xs.push(x1, x2);
     if (x + hw + T * 2 > x1 && x - hw - T * 2 < x2) ys.push(y1, y2);
   }
-  return [x + bestDelta(x, hw, xs, T), y + bestDelta(y, hh, ys, T)];
+  return [x + bestDelta(x, ox, xs, T), y + bestDelta(y, oy, ys, T)];
 }
 
 /* ---------- undo ---------- */
@@ -429,13 +454,18 @@ class Board {
     for (const p of ps) {
       const it = itemById(p.itemId), dragging = this.drag && this.drag.pid === p.id;
       const [wx, wy] = dragging ? [this.drag.x, this.drag.y] : world(p), selected = p.id === this.sel, dim = dimOf(p.room);
-      items += `<g class="item" data-pid="${esc(p.id)}"${dim ? ' opacity=".45" style="pointer-events:none"' : ''}><g transform="translate(${f1(wx)} ${f1(wy)}) rotate(${p.rot})"><rect x="${-it.w / 2}" y="${-it.d / 2}" width="${it.w}" height="${it.d}" fill="${esc(it.color)}" fill-opacity=".93" stroke="${selected ? '#ff7a00' : '#35423f'}" stroke-width="${selected ? 3 : 1}" ${ns}/></g>`;
-      const small = Math.min(it.w, it.d) * sc < 26;
+      const parts = it.parts && it.parts.length ? it.parts : [{ x: 0, y: 0, w: it.w, d: it.d }];
+      const rects = at => parts.map(q => `<rect x="${q.x - it.w / 2}" y="${q.y - it.d / 2}" width="${q.w}" height="${q.d}" ${at}/>`).join('');
+      items += `<g class="item" data-pid="${esc(p.id)}"${dim ? ' opacity=".45" style="pointer-events:none"' : ''}><g transform="translate(${f1(wx)} ${f1(wy)}) rotate(${p.rot})">${rects(`fill="none" stroke="${selected ? '#ff7a00' : '#35423f'}" stroke-width="${selected ? 7 : 3}" ${ns}`)}${rects(`fill="${esc(it.color)}" stroke="${esc(it.color)}" stroke-width="1" ${ns}`)}</g>`;
+      const main = parts.reduce((a, q) => q.w * q.d > a.w * a.d ? q : a, parts[0]);
+      const th = p.rot * Math.PI / 180, mx = main.x + main.w / 2 - it.w / 2, my = main.y + main.d / 2 - it.d / 2;
+      const lx = wx + mx * Math.cos(th) - my * Math.sin(th), ly = wy + mx * Math.sin(th) + my * Math.cos(th);
+      const small = Math.min(main.w, main.d) * sc < 26;
       if (!small || selected) {
-        const maxc = Math.max(4, Math.floor(Math.max(it.w, it.d) * sc / 6.5));
+        const maxc = Math.max(4, Math.floor(Math.max(main.w, main.d) * sc / 6.5));
         const nm = it.name.length > maxc ? it.name.slice(0, maxc - 1) + '…' : it.name;
-        items += `<text class="lbl" x="${f1(wx)}" y="${f1(wy - (selected ? px(6) : 0))}" font-size="${px(11)}" stroke-width="${px(3)}">${esc(nm)}</text>`;
-        if (selected) items += `<text class="lbl" x="${f1(wx)}" y="${f1(wy + px(7))}" font-size="${px(9.5)}" stroke-width="${px(3)}" style="fill:#555">${it.w}×${it.d}</text>`;
+        items += `<text class="lbl" x="${f1(lx)}" y="${f1(ly - (selected ? px(6) : 0))}" font-size="${px(11)}" stroke-width="${px(3)}">${esc(nm)}</text>`;
+        if (selected) items += `<text class="lbl" x="${f1(lx)}" y="${f1(ly + px(7))}" font-size="${px(9.5)}" stroke-width="${px(3)}" style="fill:#555">${it.w}×${it.d}</text>`;
       }
       items += '</g>';
     }
@@ -475,7 +505,10 @@ class Board {
     const a = b.dataset.a;
     act(() => {
       const L = this.layout;
-      if (a === 'rotl' || a === 'rotr') { const d = a === 'rotl' ? -90 : 90; p.rot = S.ui.snap ? norm(Math.round(p.rot / 90) * 90 + d) : norm(p.rot + d); }
+      if (a === 'rotl' || a === 'rotr') {
+        const d = a === 'rotl' ? -90 : 90; p.rot = S.ui.snap ? norm(Math.round(p.rot / 90) * 90 + d) : norm(p.rot + d);
+        if (S.ui.snap) { const it = itemById(p.itemId), [wx, wy] = world(p), [nx, ny] = snapMove(L, p.id, p.room, it, p.rot, wx, wy, this.scale); p.x = f1(nx - G[p.room].pos[0]); p.y = f1(ny - G[p.room].pos[1]); }
+      }
       else if (a === 'dup') { const q = { ...p, id: uid(), x: p.x + 25, y: p.y + 25 }; L.placements.push(q); this.sel = q.id; }
       else if (a === 'del') { L.placements = L.placements.filter(q => q.id !== p.id); this.sel = null; }
     });
@@ -652,7 +685,7 @@ function renderDrawer() {
   if (!rows.length) { list.append(h('div', { class: 'empty' }, S.items.length ? 'No matching items' : 'No items yet. Tap “+ New item”.')); return; }
   for (const i of rows) list.append(h('div', { class: 'row' },
     h('span', { class: 'sw', style: `background:${esc(i.color)}` }),
-    h('div', { class: 'meta' }, h('b', {}, i.name), h('small', {}, `${i.w} × ${i.d} cm${i.category ? ' · ' + i.category : ''}`)),
+    h('div', { class: 'meta' }, h('b', {}, i.name), h('small', {}, `${i.w} × ${i.d} cm${i.parts ? ' · combined shape' : ''}${i.category ? ' · ' + i.category : ''}`)),
     h('button', { class: 'primary', onclick: () => addItem(i.id) }, 'Add'),
     h('button', { onclick: () => editItem(i) }, 'Edit')));
 }
@@ -665,14 +698,94 @@ async function editItem(it) {
   const d = h('input', { type: 'number', inputmode: 'decimal', min: '1', max: '2000', value: it ? it.d : 60 });
   const color = h('input', { type: 'color', value: it ? it.color : '#9db7d5' });
   const cat = h('input', { type: 'text', list: 'catlist', value: it ? (it.category || '') : '', placeholder: 'optional, e.g. Storage', maxlength: '40' });
+  const st = { parts: it && it.parts ? it.parts.map(q => ({ ...q })) : null, sel: 0 };
+  const shapeBox = h('div', { class: 'shapebox' });
+  const bboxOf = ps => ({ x1: Math.min(...ps.map(q => q.x)), y1: Math.min(...ps.map(q => q.y)), x2: Math.max(...ps.map(q => q.x + q.w)), y2: Math.max(...ps.map(q => q.y + q.d)) });
+  const syncWD = () => {
+    if (st.parts) { const b = bboxOf(st.parts); w.value = f1(b.x2 - b.x1); d.value = f1(b.y2 - b.y1); w.disabled = d.disabled = true; }
+    else w.disabled = d.disabled = false;
+  };
+  const snapA = (v, len, targets, T) => {
+    let best = null;
+    for (const t of targets) for (const dl2 of [t - v, t - (v + len)]) if (Math.abs(dl2) <= T && (best === null || Math.abs(dl2) < Math.abs(best))) best = dl2;
+    return best === null ? Math.round(v) : v + best;
+  };
+  function renderShape() {
+    shapeBox.textContent = '';
+    if (!st.parts) {
+      shapeBox.append(h('button', { onclick: () => { st.parts = [{ x: 0, y: 0, w: Math.max(1, +w.value || 100), d: Math.max(1, +d.value || 60) }]; st.sel = 0; syncWD(); renderShape(); } }, 'Combine shapes (e.g. a corner sofa)…'));
+      return;
+    }
+    const ps = st.parts, b = bboxOf(ps), pad = Math.max(40, Math.max(b.x2 - b.x1, b.y2 - b.y1) * 0.25);
+    const svg = document.createElementNS(NS, 'svg'); svg.setAttribute('class', 'shape');
+    svg.setAttribute('viewBox', `${b.x1 - pad} ${b.y1 - pad} ${b.x2 - b.x1 + 2 * pad} ${b.y2 - b.y1 + 2 * pad}`);
+    const scale = () => { const m = svg.getScreenCTM(); return m ? m.a : 1; };
+    const draw = () => {
+      const r = 9 / scale();
+      svg.innerHTML = `<rect x="${b.x1}" y="${b.y1}" width="${b.x2 - b.x1}" height="${b.y2 - b.y1}" fill="none" stroke="#9bb" stroke-dasharray="4 4" stroke-width="1" vector-effect="non-scaling-stroke" style="pointer-events:none"/>` +
+        ps.map((q, i) => `<rect data-i="${i}" x="${q.x}" y="${q.y}" width="${q.w}" height="${q.d}" fill="${esc(color.value)}" fill-opacity=".85" stroke="${i === st.sel ? '#ff7a00' : '#35423f'}" stroke-width="${i === st.sel ? 3 : 1.5}" vector-effect="non-scaling-stroke" style="cursor:move"/>`).join('') +
+        (ps[st.sel] ? `<circle data-h="1" cx="${ps[st.sel].x + ps[st.sel].w}" cy="${ps[st.sel].y + ps[st.sel].d}" r="${r}" fill="#ff7a00" stroke="#fff" stroke-width="1.5" vector-effect="non-scaling-stroke" style="cursor:nwse-resize"/>` : '');
+    };
+    const inputs = {};
+    const nums = h('div', { class: 'four' });
+    for (const k of ['x', 'y', 'w', 'd']) {
+      inputs[k] = h('input', { type: 'number', inputmode: 'decimal', step: '1' });
+      inputs[k].oninput = () => { const q = ps[st.sel]; let v = +inputs[k].value; if (!isFinite(v)) return; if (k === 'w' || k === 'd') v = Math.max(5, v); q[k] = v; draw(); syncWD(); };
+      inputs[k].onchange = () => renderShape();
+      nums.append(h('label', {}, k === 'x' ? 'Left' : k === 'y' ? 'Top' : k === 'w' ? 'Width' : 'Depth', inputs[k]));
+    }
+    const fields = () => { const q = ps[st.sel]; for (const k of ['x', 'y', 'w', 'd']) inputs[k].value = f1(q[k]); };
+    const toU = e => { const pt = svg.createSVGPoint(); pt.x = e.clientX; pt.y = e.clientY; const q = pt.matrixTransform(svg.getScreenCTM().inverse()); return [q.x, q.y]; };
+    let drag = null;
+    svg.onpointerdown = e => {
+      const t = e.target, ds = t.dataset || {};
+      if (ds.h) drag = { mode: 'size' };
+      else if (ds.i !== undefined) { st.sel = +ds.i; const [ux, uy] = toU(e); drag = { mode: 'move', dx: ps[st.sel].x - ux, dy: ps[st.sel].y - uy }; }
+      else return;
+      try { svg.setPointerCapture(e.pointerId); } catch (_) {}
+      fields(); draw();
+    };
+    svg.onpointermove = e => {
+      if (!drag) return;
+      const q = ps[st.sel], [ux, uy] = toU(e), T = 8 / scale(), oth = ps.filter((_, i) => i !== st.sel);
+      if (drag.mode === 'move') {
+        q.x = snapA(ux + drag.dx, q.w, oth.flatMap(o => [o.x, o.x + o.w]), T);
+        q.y = snapA(uy + drag.dy, q.d, oth.flatMap(o => [o.y, o.y + o.d]), T);
+      } else {
+        const tx = oth.flatMap(o => [o.x, o.x + o.w]), ty = oth.flatMap(o => [o.y, o.y + o.d]);
+        const rx = tx.find(t => Math.abs(t - ux) <= T), ry = ty.find(t => Math.abs(t - uy) <= T);
+        q.w = Math.max(5, Math.round((rx !== undefined ? rx : ux) - q.x)); q.d = Math.max(5, Math.round((ry !== undefined ? ry : uy) - q.y));
+      }
+      fields(); draw(); syncWD();
+    };
+    svg.onpointerup = svg.onpointercancel = () => { if (drag) { drag = null; renderShape(); } };
+    shapeBox.append(svg, nums,
+      h('div', { class: 'acts', style: 'justify-content:flex-start' },
+        h('button', { onclick: () => { const nb = bboxOf(ps); ps.push({ x: nb.x2, y: nb.y1, w: 60, d: 60 }); st.sel = ps.length - 1; syncWD(); renderShape(); } }, '+ Add part'),
+        h('button', { class: 'danger', onclick: () => { if (ps.length < 2) { toast('A shape needs at least one part'); return; } ps.splice(st.sel, 1); st.sel = 0; syncWD(); renderShape(); } }, 'Delete part'),
+        h('button', { onclick: () => { st.parts = null; syncWD(); renderShape(); } }, 'Simple rectangle')),
+      h('p', {}, 'Drag a part to move it, drag the orange dot to resize it, or type exact numbers. Parts snap to each other’s edges.'));
+    color.oninput = draw;
+    draw(); fields();
+  }
   const ok = () => name.value.trim() && +w.value > 0 && +d.value > 0;
   const actions = [{ label: 'Cancel', value: 'cancel' }];
   if (!isNew) actions.push({ label: 'Delete', value: 'delete', cls: 'danger' });
   actions.push({ label: 'Save', value: 'save', cls: 'primary', check: ok });
-  const r = await modal({ title: isNew ? 'New item' : 'Edit item', body: [h('label', {}, 'Name', name), h('div', { class: 'two' }, h('label', {}, 'Width (cm)', w), h('label', {}, 'Depth (cm)', d)), h('div', { class: 'two' }, h('label', {}, 'Colour', color), h('label', {}, 'Category', cat, dl))], actions });
+  syncWD();
+  const pr = modal({ title: isNew ? 'New item' : 'Edit item', body: [h('label', {}, 'Name', name), h('div', { class: 'two' }, h('label', {}, 'Width (cm)', w), h('label', {}, 'Depth (cm)', d)), shapeBox, h('div', { class: 'two' }, h('label', {}, 'Colour', color), h('label', {}, 'Category', cat, dl))], actions });
+  renderShape();
+  const r = await pr;
   if (r === 'save') {
     const v = { name: name.value.trim(), w: clamp(Math.round(+w.value * 10) / 10, 1, 2000), d: clamp(Math.round(+d.value * 10) / 10, 1, 2000), color: color.value, category: cat.value.trim() };
-    if (isNew) S.items.push({ id: uid(), ...v }); else Object.assign(it, v);
+    let parts = null;
+    if (st.parts && st.parts.length > 1) {
+      const b = bboxOf(st.parts);
+      parts = st.parts.map(q => ({ x: f1(q.x - b.x1), y: f1(q.y - b.y1), w: f1(q.w), d: f1(q.d) }));
+      v.w = clamp(f1(b.x2 - b.x1), 1, 2000); v.d = clamp(f1(b.y2 - b.y1), 1, 2000);
+    } else if (st.parts && st.parts.length === 1) { v.w = clamp(f1(st.parts[0].w), 1, 2000); v.d = clamp(f1(st.parts[0].d), 1, 2000); }
+    if (isNew) S.items.push({ id: uid(), ...v, ...(parts ? { parts } : {}) });
+    else { Object.assign(it, v); if (parts) it.parts = parts; else delete it.parts; }
     save(); renderDrawer(); renderAll();
   } else if (r === 'delete') {
     const used = S.layouts.reduce((n, l) => n + l.placements.filter(p => p.itemId === it.id).length, 0);
@@ -723,7 +836,7 @@ const exportLayout = () => exportFile(`home-planner-layout-${curLayout().name.re
 const exportLayouts = () => exportFile(`home-planner-layouts-${today()}.json`, wrap('layouts', { items: usedItems(S.layouts), layouts: S.layouts }));
 const exportRooms = () => exportFile(`rooms-${today()}.json`, S.house);
 const exportAll = () => exportFile(`home-planner-backup-${today()}.json`, wrap('all', { items: S.items, layouts: S.layouts, rooms: S.house }));
-const sameItem = (a, b) => a.name === b.name && +a.w === +b.w && +a.d === +b.d && (a.color || '') === (b.color || '') && (a.category || '') === (b.category || '');
+const sameItem = (a, b) => JSON.stringify(a.parts || null) === JSON.stringify(b.parts || null) && a.name === b.name && +a.w === +b.w && +a.d === +b.d && (a.color || '') === (b.color || '') && (a.category || '') === (b.category || '');
 function uniqueName(base, taken) { let n = 2, nm = base + ' (2)'; while (taken.has(nm)) nm = base + ' (' + (++n) + ')'; return nm; }
 function validRooms(r) { return r && Array.isArray(r.rooms) && r.rooms.length && r.rooms.every(x => x.id && Array.isArray(x.position) && Array.isArray(x.points) && x.points.length >= 3); }
 async function importData(o) {
@@ -733,7 +846,13 @@ async function importData(o) {
   const map = {}, names = new Set(S.items.map(i => i.name));
   for (const raw of items) {
     if (!raw || typeof raw.name !== 'string' || !(+raw.w > 0) || !(+raw.d > 0)) continue;
-    const it = { id: String(raw.id || uid()), name: raw.name.slice(0, 60), w: +raw.w, d: +raw.d, color: /^#[0-9a-f]{6}$/i.test(raw.color) ? raw.color : '#9db7d5', category: String(raw.category || '').slice(0, 40) };
+    let parts = null, W = +raw.w, D = +raw.d;
+    if (Array.isArray(raw.parts) && raw.parts.length > 1 && raw.parts.length <= 12 && raw.parts.every(q => q && isFinite(+q.x) && isFinite(+q.y) && +q.w > 0 && +q.d > 0)) {
+      const ps = raw.parts.map(q => ({ x: +q.x, y: +q.y, w: +q.w, d: +q.d })), mx = Math.min(...ps.map(q => q.x)), my = Math.min(...ps.map(q => q.y));
+      parts = ps.map(q => ({ x: f1(q.x - mx), y: f1(q.y - my), w: q.w, d: q.d }));
+      W = Math.max(...parts.map(q => q.x + q.w)); D = Math.max(...parts.map(q => q.y + q.d));
+    }
+    const it = { id: String(raw.id || uid()), name: raw.name.slice(0, 60), w: W, d: D, ...(parts ? { parts } : {}), color: /^#[0-9a-f]{6}$/i.test(raw.color) ? raw.color : '#9db7d5', category: String(raw.category || '').slice(0, 40) };
     const ex = itemById(it.id);
     if (!ex) { S.items.push(it); names.add(it.name); map[raw.id] = it.id; rep.added++; }
     else if (sameItem(ex, it)) { map[raw.id] = ex.id; rep.same++; }
@@ -790,6 +909,7 @@ function help() {
   modal({ title: 'How it works', body: [
     h('p', {}, '• First time: Menu → Import a file → choose your rooms.json. The plan is then kept in this browser; each device needs to import it once.'),
     h('p', {}, '• Tap a room to zoom in; pick “Whole house” to zoom out. Drag to pan, pinch or scroll to zoom.'),
+    h('p', {}, '• Corner sofa or other odd shape? In an item’s edit window choose “Combine shapes” to build it from several rectangles.'),
     h('p', {}, '• “+ New item” adds an item to your library; “Add” puts it in the room you are looking at. Drag items to move them; the bar at the bottom rotates, duplicates or removes the selected one.'),
     h('p', {}, '• Snap makes items click against walls and each other (90° turns). Switch to Free for free movement and any angle.'),
     h('p', {}, '• Walls: tap a wall and pick a colour. Colours belong to the layout you are in.'),
