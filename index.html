@@ -422,18 +422,19 @@ class Board {
       if (view === id || (bw > nm.length * 6.5 + 8 && bh > 20)) labels += `<text class="lbl rlbl" x="${g.label[0]}" y="${g.label[1]}" font-size="${px(12)}" stroke-width="${px(3)}"${dim ? ' opacity=".35"' : ''}>${esc(nm)}</text>`;
       for (const e of g.edges) {
         const [A, B] = [e.a, e.b];
+        const sh = (pt, k) => [pt[0] - e.nrm[0] * px(k), pt[1] - e.nrm[1] * px(k)];
         if (e.open) { walls += `<line x1="${f1(A[0])}" y1="${f1(A[1])}" x2="${f1(B[0])}" y2="${f1(B[1])}" stroke="#8fb5af" stroke-width="1" stroke-dasharray="4 4" ${ns} style="pointer-events:none"${dim ? ' opacity=".4"' : ''}/>`; continue; }
         const sel = S.ui.wallSel && S.ui.wallSel.key === e.key && S.ui.wallSel.layoutId === lay.id;
-        if (sel) walls += `<line x1="${f1(A[0])}" y1="${f1(A[1])}" x2="${f1(B[0])}" y2="${f1(B[1])}" stroke="#ff9d2e" stroke-opacity=".6" stroke-width="13" stroke-linecap="round" ${ns} style="pointer-events:none"/>`;
+        if (sel) { const A2 = sh(A, 2.5), B2 = sh(B, 2.5); walls += `<line x1="${f1(A2[0])}" y1="${f1(A2[1])}" x2="${f1(B2[0])}" y2="${f1(B2[1])}" stroke="#ff9d2e" stroke-opacity=".6" stroke-width="13" stroke-linecap="round" ${ns} style="pointer-events:none"/>`; }
         const col = lay.wallColors[e.key] || DEFAULT_WALL;
         for (const [s0, s1] of e.solid) {
-          const p1 = edgePt(e, s0), p2 = edgePt(e, s1);
+          const p1 = sh(edgePt(e, s0), 2.5), p2 = sh(edgePt(e, s1), 2.5);
           walls += `<line x1="${f1(p1[0])}" y1="${f1(p1[1])}" x2="${f1(p2[0])}" y2="${f1(p2[1])}" stroke="${esc(col)}" stroke-width="5" stroke-linecap="square" ${ns} style="pointer-events:none"${dim ? ' opacity=".5"' : ''}/>`;
           if (!dim) hits += `<line class="hit" data-wall="${esc(e.key)}" x1="${f1(p1[0])}" y1="${f1(p1[1])}" x2="${f1(p2[0])}" y2="${f1(p2[1])}" stroke="rgba(0,0,0,0.004)" stroke-width="24" stroke-linecap="butt" ${ns} style="cursor:pointer"/>`;
         }
         for (const o of e.ops) {
           const s0 = Math.max(0, o.s), s1 = Math.min(e.len, o.e), P = edgePt(e, s0), Q = edgePt(e, s1);
-          const L = `x1="${f1(P[0])}" y1="${f1(P[1])}" x2="${f1(Q[0])}" y2="${f1(Q[1])}"`, op = dim ? ' opacity=".5"' : '';
+          const k = o.kind === 'window' ? 4 : 3.5, P2 = sh(P, k), Q2 = sh(Q, k), L = `x1="${f1(P2[0])}" y1="${f1(P2[1])}" x2="${f1(Q2[0])}" y2="${f1(Q2[1])}"`, op = dim ? ' opacity=".5"' : '';
           if (o.kind === 'window') {
             opens += `<line ${L} stroke="#7d8c8a" stroke-width="8" stroke-linecap="butt" ${ns} style="pointer-events:none"${op}/><line ${L} stroke="#fff" stroke-width="5" stroke-linecap="butt" ${ns} style="pointer-events:none"${op}/>`;
           } else {
@@ -455,8 +456,10 @@ class Board {
       const it = itemById(p.itemId), dragging = this.drag && this.drag.pid === p.id;
       const [wx, wy] = dragging ? [this.drag.x, this.drag.y] : world(p), selected = p.id === this.sel, dim = dimOf(p.room);
       const parts = it.parts && it.parts.length ? it.parts : [{ x: 0, y: 0, w: it.w, d: it.d }];
-      const rects = at => parts.map(q => `<rect x="${q.x - it.w / 2}" y="${q.y - it.d / 2}" width="${q.w}" height="${q.d}" ${at}/>`).join('');
-      items += `<g class="item" data-pid="${esc(p.id)}"${dim ? ' opacity=".45" style="pointer-events:none"' : ''}><g transform="translate(${f1(wx)} ${f1(wy)}) rotate(${p.rot})">${rects(`fill="none" stroke="${selected ? '#ff7a00' : '#35423f'}" stroke-width="${selected ? 7 : 3}" ${ns}`)}${rects(`fill="${esc(it.color)}" stroke="${esc(it.color)}" stroke-width="1" ${ns}`)}</g>`;
+      const bxs = itemBoxes(it, 0), bd = px(selected ? 3 : 1.5), ov = px(0.5), rc = (x1, y1, x2, y2, f) => `<rect x="${f1(x1 * 100) / 100}" y="${f1(y1 * 100) / 100}" width="${f1((x2 - x1) * 100) / 100}" height="${f1((y2 - y1) * 100) / 100}" fill="${f}"/>`;
+      const under = bxs.map(q => rc(q.x1, q.y1, q.x2, q.y2, selected ? '#ff7a00' : '#35423f')).join('');
+      const fillr = bxs.map(q => rc(q.x1 + (q.e1 ? bd : -ov), q.y1 + (q.f1 ? bd : -ov), q.x2 - (q.e2 ? bd : -ov), q.y2 - (q.f2 ? bd : -ov), esc(it.color))).join('');
+      items += `<g class="item" data-pid="${esc(p.id)}"${dim ? ' opacity=".45" style="pointer-events:none"' : ''}><g transform="translate(${f1(wx)} ${f1(wy)}) rotate(${p.rot})">${under}${fillr}</g>`;
       const main = parts.reduce((a, q) => q.w * q.d > a.w * a.d ? q : a, parts[0]);
       const th = p.rot * Math.PI / 180, mx = main.x + main.w / 2 - it.w / 2, my = main.y + main.d / 2 - it.d / 2;
       const lx = wx + mx * Math.cos(th) - my * Math.sin(th), ly = wy + mx * Math.sin(th) + my * Math.cos(th);
@@ -839,11 +842,13 @@ const exportAll = () => exportFile(`home-planner-backup-${today()}.json`, wrap('
 const sameItem = (a, b) => JSON.stringify(a.parts || null) === JSON.stringify(b.parts || null) && a.name === b.name && +a.w === +b.w && +a.d === +b.d && (a.color || '') === (b.color || '') && (a.category || '') === (b.category || '');
 function uniqueName(base, taken) { let n = 2, nm = base + ' (2)'; while (taken.has(nm)) nm = base + ' (' + (++n) + ')'; return nm; }
 function validRooms(r) { return r && Array.isArray(r.rooms) && r.rooms.length && r.rooms.every(x => x.id && Array.isArray(x.position) && Array.isArray(x.points) && x.points.length >= 3); }
-async function importData(o) {
+async function importData(o, mode) {
   const rep = { added: 0, copied: 0, same: 0, lAdded: 0, lCopied: 0, lSame: 0, rooms: '' };
   const looksRooms = validRooms(o) && !o.layouts && !o.items;
   const items = Array.isArray(o.items) ? o.items : [], layouts = Array.isArray(o.layouts) ? o.layouts : [];
-  const map = {}, names = new Set(S.items.map(i => i.name));
+  const map = {}; let removedPl = 0;
+  if (mode === 'replace') S.items = [];
+  const names = new Set(S.items.map(i => i.name));
   for (const raw of items) {
     if (!raw || typeof raw.name !== 'string' || !(+raw.w > 0) || !(+raw.d > 0)) continue;
     let parts = null, W = +raw.w, D = +raw.d;
@@ -858,6 +863,7 @@ async function importData(o) {
     else if (sameItem(ex, it)) { map[raw.id] = ex.id; rep.same++; }
     else { const c = { ...it, id: uid(), name: uniqueName(it.name, names) }; names.add(c.name); S.items.push(c); map[raw.id] = c.id; rep.copied++; }
   }
+  if (mode === 'replace') for (const l of S.layouts) { const n = l.placements.length; l.placements = l.placements.filter(p => itemById(p.itemId)); removedPl += n - l.placements.length; }
   const lnames = new Set(S.layouts.map(l => l.name));
   for (const raw of layouts) {
     if (!raw || !Array.isArray(raw.placements)) continue;
@@ -880,7 +886,8 @@ async function importData(o) {
   } else if (newRooms) rep.rooms = 'House plan is the same as the one you have.';
   save(); renderDrawer(); boards.forEach(b => b.needFit = true); renderAll();
   const parts = [];
-  if (items.length) parts.push(`Items: ${rep.added} added${rep.copied ? `, ${rep.copied} added as copies (same item, different data)` : ''}${rep.same ? `, ${rep.same} already in your library` : ''}.`);
+  if (mode === 'replace') parts.push(`Library replaced by the ${S.items.length} item${S.items.length === 1 ? '' : 's'} in this file${removedPl ? `; ${removedPl} placement${removedPl === 1 ? '' : 's'} of items that are no longer in the library ${removedPl === 1 ? 'was' : 'were'} removed from your layouts` : ''}.`);
+  else if (items.length) parts.push(`Items: ${rep.added} added${rep.copied ? `, ${rep.copied} added as copies (same item, different data)` : ''}${rep.same ? `, ${rep.same} already in your library` : ''}.`);
   if (layouts.length) parts.push(`Layouts: ${rep.lAdded} added${rep.lCopied ? `, ${rep.lCopied} added as copies` : ''}${rep.lSame ? `, ${rep.lSame} already there` : ''}.`);
   if (rep.rooms) parts.push(rep.rooms);
   return parts.join(' ') || 'Nothing to import in that file.';
@@ -888,7 +895,18 @@ async function importData(o) {
 async function importFiles(files) {
   const out = [];
   for (const f of files) {
-    try { const o = JSON.parse(await f.text()); out.push(f.name + ': ' + await importData(o)); }
+    try {
+      const o = JSON.parse(await f.text());
+      let mode = 'add';
+      if (Array.isArray(o.items) && o.items.length && !Array.isArray(o.layouts) && S.items.length) {
+        const ids = new Set(o.items.map(i => i && String(i.id))), gone = S.layouts.reduce((n, l) => n + l.placements.filter(p => !ids.has(p.itemId)).length, 0);
+        const r = await modal({ title: 'Import items', body: [h('p', {}, `“${f.name}” has ${o.items.length} item${o.items.length === 1 ? '' : 's'}. You have ${S.items.length} in your library.`), h('p', {}, 'Add keeps everything you have and adds the new ones. Replace swaps your whole library for this file.' + (gone ? ` With Replace, ${gone} placement${gone === 1 ? '' : 's'} of items that are not in the file will disappear from your layouts.` : ''))],
+          actions: [{ label: 'Cancel', value: null }, { label: 'Replace library', value: 'replace', cls: 'danger' }, { label: 'Add to library', value: 'add', cls: 'primary' }] });
+        if (!r) { out.push(f.name + ': import cancelled.'); continue; }
+        mode = r;
+      }
+      out.push(f.name + ': ' + await importData(o, mode));
+    }
     catch (e) { out.push(f.name + ': could not read this file.'); }
   }
   await modal({ title: 'Import finished', body: out.map(t => h('p', {}, t)), actions: [{ label: 'OK', value: true, cls: 'primary' }] });
